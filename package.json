@@ -1,5 +1,5 @@
 {
-  "name": "linear-ops",
+  "name": "linear-multi-workspaces",
   "version": "0.1.0",
   "private": true,
   "description": "Scriptable multi-workspace Linear CLI + Claude skill",

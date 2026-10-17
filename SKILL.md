@@ -31,14 +31,14 @@ code, not hand-rolled GraphQL.
 **Credentials** (never committed, lives outside any repo):
 `~/.config/linear-cli/credentials.json`, `chmod 600`:
 ```json
-{ "ksu-oor": "lin_api_...", "some-other-profile": "lin_api_..." }
+{ "work-main": "lin_api_...", "some-other-profile": "lin_api_..." }
 ```
 Get a Personal API Key from a workspace's Settings → Security & access → API keys.
 
 **Per-repo marker** (committed, non-secret): `.claude/linear-workspace.json` in the repo
 you want tied to a given Linear workspace/team:
 ```json
-{ "profile": "ksu-oor", "team": "DD" }
+{ "profile": "work-main", "team": "ENG" }
 ```
 `--profile` and `--team` flags override the marker for one-off calls. See
 `.claude/linear-workspace.json.example` in this skill for the shape.

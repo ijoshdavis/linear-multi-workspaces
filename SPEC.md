@@ -16,9 +16,9 @@ capturing and refining specs inside issues, and periodically cleaning up the bac
   future extension if that changes.
 - Cross-workspace bulk operations in a single call — one invocation always targets
   exactly one workspace.
-- ~~Replacing the hosted Linear connector for the personal `ijoshdavis` workspace~~ —
-  originally scoped out since the hosted connector already covers it. A profile for
-  `ijoshdavis` was added anyway during rollout, as a deliberate exception — see
+- ~~Replacing the hosted Linear connector for your personal workspace~~ — originally
+  scoped out since the hosted connector already covers it. A profile for the personal
+  workspace was added anyway during rollout, as a deliberate exception — see
   **Recommended usage** below for how to choose between the two there.
 
 ## Architecture (as built)
@@ -40,7 +40,7 @@ untyped boundary is Claude ↔ script (CLI args in, JSON out).
 ## Credential & workspace model (as built)
 
 - **Per-repo marker** (committed, non-secret): `.claude/linear-workspace.json`, e.g.
-  `{ "profile": "ksu-oor", "team": "DD" }`. Template at `.claude/linear-workspace.json.example`.
+  `{ "profile": "work-main", "team": "ENG" }`. Template at `.claude/linear-workspace.json.example`.
 - **Credential store** (never committed, outside any repo): `~/.config/linear-cli/credentials.json`,
   `chmod 600`, one Personal API Key per named profile.
 - `--profile` / `--team` flags override the marker per call. Missing profile/credential
@@ -48,13 +48,13 @@ untyped boundary is Claude ↔ script (CLI args in, JSON out).
 - `linear-cli whoami` resolves and prints profile + workspace + viewer + team; run it
   before the first write in any session touching a workspace.
 
-Currently configured profiles (update this list as profiles change):
+Example profile table (yours will differ — update this list as profiles change):
 
 | profile | workspace | notes |
 |---|---|---|
-| `ksu-oor` | Office of Research (Kennesaw State) | teams `ADM`, `DD` |
-| `ijoshdavis` | personal workspace | exception — see Recommended usage |
-| `rth` | ReThink Higher | team `RET` |
+| `work-main` | a non-personal workspace the hosted connector can't reach | teams `ENG`, `OPS` |
+| `personal` | your personal workspace | exception — see Recommended usage |
+| `client-a` | another non-personal workspace | team `PROJ` |
 
 ## Command surface (as built)
 
@@ -105,18 +105,19 @@ and `retire-label` default to dry-run and only mutate with `--apply`.
 
 ## Recommended usage
 
-- **Workspaces the hosted claude.ai Linear connector can't reach** (`ksu-oor`, `rth`,
-  and any future non-personal workspace): `linear-multi-workspaces` is the only path. No ambiguity.
-- **The personal `ijoshdavis` workspace**: the hosted connector is already authenticated,
-  richer, and was the original intended path — it works fine from inside Conductor too
-  (Conductor workspaces are just directories on this Mac; MCP connector access isn't
-  scoped per-worktree). Prefer the hosted connector there to avoid two tools writing to
-  the same workspace through different code paths. The `ijoshdavis` profile exists in
-  `linear-multi-workspaces` as a deliberate fallback, added during rollout in case the hosted connector
+- **Workspaces the hosted claude.ai Linear connector can't reach** (any non-personal
+  workspace, e.g. a work or client workspace): `linear-multi-workspaces` is the only path.
+  No ambiguity.
+- **Your personal workspace**: the hosted connector is already authenticated, richer, and
+  was the original intended path — it works fine from inside Conductor too (Conductor
+  workspaces are just directories on this Mac; MCP connector access isn't scoped
+  per-worktree). Prefer the hosted connector there to avoid two tools writing to the same
+  workspace through different code paths. A profile for your personal workspace can still
+  exist in `linear-multi-workspaces` as a deliberate fallback in case the hosted connector
   turns out not to be reliably reachable in some Conductor session — if that happens,
-  switch to `linear-cli --profile ijoshdavis` for that session and note why.
-- When in doubt about which tool created/touched an issue in `ijoshdavis`, check `whoami`
-  output and the issue's activity log rather than guessing.
+  switch to `linear-cli --profile <personal>` for that session and note why.
+- When in doubt about which tool created/touched an issue in your personal workspace,
+  check `whoami` output and the issue's activity log rather than guessing.
 
 ## Script internals
 
@@ -131,12 +132,12 @@ and `retire-label` default to dry-run and only mutate with `--apply`.
 
 ## Test record (v1 rollout)
 
-Live-verified against all three configured workspaces from this Conductor session:
+Live-verified against all configured workspaces from this Conductor session:
 `whoami`, `create-issue`, `add-comment --quote`, `update-issue --append-section` +
 `--state`, `list-issues` with team/state/query filters, `bulk-update` dry-run,
 `retire-label` dry-run, `archive-issue` dry-run + `--apply`. Created and assigned a
-`CONDUCTOR-TEST` issue in each of `ksu-oor` (DD-696), `ijoshdavis` (ME-28), and `rth`
-(RET-7) to confirm the full create → assign path end-to-end per workspace.
+`CONDUCTOR-TEST` issue in each configured workspace to confirm the full create → assign
+path end-to-end per workspace.
 
 ## Open questions / future extensions
 

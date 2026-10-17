@@ -1,9 +1,9 @@
 ---
-name: linear-ops
+name: linear-multi-workspaces
 description: Scriptable Linear operations for workspaces the hosted claude.ai Linear connector can't reach. Use for "create a Linear issue/project", "refine the spec in LIN-123", "add a comment to LIN-123", "clean up stale issues", or any Linear create/update/comment/audit/cleanup task in a non-default workspace.
 ---
 
-# linear-ops
+# linear-multi-workspaces
 
 A CLI + credential/profile model for doing real work in Linear workspaces outside the
 one hosted claude.ai connector covers. Built on `@linear/sdk` (Linear's official typed
@@ -79,8 +79,8 @@ Every command prints exactly one JSON line:
 ## Porting to another project
 
 This whole directory is the skill. To make it available:
-- **Globally** (all repos on this Mac): symlink or copy it to `~/.claude/skills/linear-ops`.
-- **One project**: copy it to `<project>/.claude/skills/linear-ops`.
+- **Globally** (all repos on this Mac): symlink or copy it to `~/.claude/skills/linear-multi-workspaces`.
+- **One project**: copy it to `<project>/.claude/skills/linear-multi-workspaces`.
 
 Either way, run `npm install` once inside the copy (installs `@linear/sdk`), then add a
 `.claude/linear-workspace.json` marker to whichever repo's work should resolve to that

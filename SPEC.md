@@ -1,148 +1,210 @@
-# Spec: `linear-multi-workspaces` — a custom skill + CLI for multi-workspace Linear work
+# Feature Specification: `linear-multi-workspaces` — multi-workspace Linear CLI + skill
 
-Status: **v1 built and merged to `main`**, live-tested against three real workspaces.
-This supersedes the original chat draft — it records what was actually built, how it's
-deployed, and how to choose between this tool and the hosted connector.
+**Feature Branch**: `main`
 
-## Goal
+**Created**: 2026-10-17
 
-Give Claude a single, scriptable surface for Linear that (a) isn't tied to the one
-claude.ai OAuth workspace, and (b) covers the real workflow: creating issues/projects,
+**Status**: Implemented (v1 built, merged, live-tested against three real workspaces)
+
+**Input**: Give Claude a single, scriptable surface for Linear that (a) isn't tied to the
+one claude.ai OAuth workspace, and (b) covers the real workflow: creating issues/projects,
 capturing and refining specs inside issues, and periodically cleaning up the backlog.
 
-## Non-goals (v1)
+This is an as-built spec, written in [GitHub spec-kit](https://github.com/github/spec-kit)
+format after the fact — it records what was actually shipped, not a pre-build plan. Where
+the as-built behavior deviates from what was originally scoped, that's called out inline.
 
-- File/image attachments (screenshots, diagrams) — specs are text/markdown. Flag as a
-  future extension if that changes.
-- Cross-workspace bulk operations in a single call — one invocation always targets
-  exactly one workspace.
-- ~~Replacing the hosted Linear connector for your personal workspace~~ — originally
-  scoped out since the hosted connector already covers it. A profile for the personal
-  workspace was added anyway during rollout, as a deliberate exception — see
-  **Recommended usage** below for how to choose between the two there.
+## User Scenarios & Testing *(mandatory)*
 
-## Architecture (as built)
+### User Story 1 - Create and refine issues in a workspace the hosted connector can't reach (Priority: P1)
 
-```
-Skill (SKILL.md, at the repo root)
-  → instructs Claude to invoke:
-scripts/linear-cli.mjs <subcommand> --flag value ...
-  → built on @linear/sdk (Linear's official typed JS client)
-  → reads workspace/profile config + credentials
-  → talks to Linear's GraphQL API
-  → always prints one JSON object to stdout
-```
+Claude needs to create an issue, assign it, label it, and iteratively refine its
+description/comments inside a Linear workspace the hosted claude.ai connector has no
+access to (any non-personal workspace: work, client, etc.).
 
-Uses `@linear/sdk` internally rather than hand-rolled GraphQL, so entity resolution,
-mutation shapes, and pagination are handled by Linear's own typed client. The only
-untyped boundary is Claude ↔ script (CLI args in, JSON out).
+**Why this priority**: This is the whole reason the tool exists — without it, those
+workspaces are simply unreachable from Claude.
 
-## Credential & workspace model (as built)
+**Independent Test**: Can be fully tested by running `create-issue`, `update-issue
+--append-section`, and `add-comment --quote` against one configured profile and confirming
+the issue is visible, correctly assigned/labeled, and the comment is anchored to the quoted
+text in the Linear UI.
 
-- **Per-repo marker** (committed, non-secret): `.claude/linear-workspace.json`, e.g.
-  `{ "profile": "work-main", "team": "ENG" }`. Template at `.claude/linear-workspace.json.example`.
-- **Credential store** (never committed, outside any repo): `~/.config/linear-cli/credentials.json`,
-  `chmod 600`, one Personal API Key per named profile.
-- `--profile` / `--team` flags override the marker per call. Missing profile/credential
-  fails loudly (`NO_PROFILE`, `NO_CREDENTIAL_FOR_PROFILE`) — no silent default.
-- `linear-cli whoami` resolves and prints profile + workspace + viewer + team; run it
-  before the first write in any session touching a workspace.
+**Acceptance Scenarios**:
 
-Example profile table (yours will differ — update this list as profiles change):
+1. **Given** a repo with a `.claude/linear-workspace.json` marker and a valid credential
+   for that profile, **When** `create-issue --title "..." --team ENG` is run, **Then** the
+   command prints `{"ok": true, "data": {"id", "identifier", "title", "url"}}` and the issue
+   exists in that team.
+2. **Given** an existing issue identifier, **When** `update-issue --id <ID> --append-section
+   "Findings:<path>"` is run, **Then** the issue's description gets a new `## Findings`
+   section appended below any existing content, separated by a blank line.
+3. **Given** an existing issue, **When** `add-comment --issue <ID> --body-file - --quote
+   "<exact text>"` is piped markdown on stdin, **Then** the comment is created anchored to
+   that quoted excerpt.
 
-| profile | workspace | notes |
-|---|---|---|
-| `work-main` | a non-personal workspace the hosted connector can't reach | teams `ENG`, `OPS` |
-| `personal` | your personal workspace | exception — see Recommended usage |
-| `client-a` | another non-personal workspace | team `PROJ` |
+### User Story 2 - Query and audit issues across a workspace (Priority: P2)
 
-## Command surface (as built)
+Claude needs to list/filter issues by team, state, label, or free-text query to answer
+questions or drive cleanup decisions, without hand-rolling GraphQL.
 
-```
-linear-cli whoami
+**Why this priority**: Read access is required before any safe write or bulk decision, but
+on its own it delivers less value than the create/refine path.
 
-linear-cli create-issue --title <str> [--description-file <path|->]
-  [--project <name>] [--assignee <email>] [--labels <csv>] [--priority <0-4>] [--state <name>] [--team <key>]
+**Independent Test**: Can be fully tested by running `list-issues --team ENG --state
+"In Progress"` and confirming the returned count and fields match what's visible in the
+Linear UI's filtered view.
 
-linear-cli update-issue --id <ID>
-  [--description-file <path|->] | [--append-section "<heading>:<path|->"]
-  [--title <str>] [--assignee <email>] [--labels <csv>] [--state <name>]
+**Acceptance Scenarios**:
 
-linear-cli add-comment --issue <ID> --body-file <path|-> [--quote "<exact text>"]
+1. **Given** a team with more than one page of issues, **When** `list-issues --team ENG` is
+   run, **Then** all matching issues are returned (pagination is walked transparently), not
+   just the first page.
+2. **Given** a `--query` string, **When** `list-issues --query "stale onboarding"` is run,
+   **Then** results come from Linear's search endpoint scoped to the resolved team, not a
+   client-side substring filter.
 
-linear-cli create-project --name <str> [--team <key>] [--description-file <path|->] [--lead <email>]
+### User Story 3 - Safely clean up the backlog in bulk (Priority: P3)
 
-linear-cli list-issues [--team <key>] [--state <name>] [--label <name>] [--query <str>]
+Claude needs to retire stale labels, archive dead issues, or bulk-transition issues to a new
+state, without risking an unreviewed mass mutation.
 
-linear-cli bulk-update --query '<filter-json>' --set-state <name> [--team <key>] [--apply]
-linear-cli archive-issue --id <ID> [--apply]
-linear-cli retire-label --name <str> [--apply]
-```
+**Why this priority**: High blast radius if done wrong, so it's gated behind the dry-run
+default and the two higher-value paths above — but it's the recurring maintenance task that
+justified building this over a one-off script.
 
-One deviation from the original draft: **anchored/quoted comments shipped in v1**, not
-deferred. `CommentCreateInput.quotedText` turned out to be a plain field on Linear's API —
-no extra fiddliness — so `add-comment --quote "<exact text>"` just works.
+**Independent Test**: Can be fully tested by running `bulk-update --query '{...}'
+--set-state Done` without `--apply`, confirming the dry-run output lists exactly the issues
+that would change and that none of them actually changed in Linear.
 
-Every command prints exactly one JSON line: `{"ok": true, "data": {...}}` or
-`{"ok": false, "error": {"code": ..., "message": ...}}`. `bulk-update`, `archive-issue`,
-and `retire-label` default to dry-run and only mutate with `--apply`.
+**Acceptance Scenarios**:
 
-## Deployment (as built)
+1. **Given** any of `bulk-update`, `archive-issue`, or `retire-label`, **When** run without
+   `--apply`, **Then** the command makes zero mutating calls and prints `{"dryRun": true,
+   ...}` describing exactly what would change.
+2. **Given** a prior dry-run has been shown to the user, **When** the same command is
+   re-run with `--apply`, **Then** the described mutation is performed and the command
+   prints `{"dryRun": false, ...}` with per-item results.
+3. **Given** `bulk-update --apply` without `--set-state`, **When** the command runs,
+   **Then** it fails with `MISSING_ARG` and makes no mutating calls.
 
-- **Canonical source**: GitHub repo `ijoshdavis/linear-multi-workspaces`, `main` branch.
-- **Local checkout for global use**: the non-worktree checkout at
-  `~/_src-conductor/repos/linear-multi-workspaces` (kept on `main`, `npm install`ed).
-- **Global availability**: `~/.claude/skills/linear-multi-workspaces` is a symlink to that checkout —
-  the same pattern already used for the `dt-doctor` and `ship` skills (source lives in a
-  real repo; `~/.claude/skills/<name>` just points at it). This makes the skill visible to
-  every Claude Code session on this Mac, including every Conductor workspace, regardless
-  of which repo/worktree the session is running in.
-- **Updating**: commit/push/merge in this repo as usual, then `git pull` inside
-  `~/_src-conductor/repos/linear-multi-workspaces`. No re-linking needed — every session
-  picks up the change on its next invocation.
-- **Per-repo opt-in**: any repo that should default to a given profile/team gets its own
-  `.claude/linear-workspace.json`. Repos without one still work — just pass `--profile`/`--team`.
+### Edge Cases
 
-## Recommended usage
+- No `--profile` flag and no `.claude/linear-workspace.json` marker → fails `NO_PROFILE`,
+  no silent default profile.
+- A resolved profile has no entry in `~/.config/linear-cli/credentials.json` → fails
+  `NO_CREDENTIAL_FOR_PROFILE`, naming the missing profile.
+- The credentials file is readable by group or other → a warning is printed to stderr (not
+  stdout) with the `chmod 600` fix, but the command still proceeds.
+- A name passed to `--assignee`/`--project`/`--labels`/`--state`/`--team` doesn't match any
+  known entity → fails with a `*_NOT_FOUND` error; for teams, the error lists the known team
+  keys to recover from.
+- Two different tools (this CLI and the hosted connector) can both write to the personal
+  workspace — resolved by convention (prefer the hosted connector there), not by the tool
+  itself; `whoami` + the issue's activity log is the fallback way to tell which tool touched
+  an issue.
+- `update-issue` called with neither `--description-file`/`--append-section` nor any other
+  field → fails `NO_CHANGES` rather than silently doing nothing.
 
-- **Workspaces the hosted claude.ai Linear connector can't reach** (any non-personal
-  workspace, e.g. a work or client workspace): `linear-multi-workspaces` is the only path.
-  No ambiguity.
-- **Your personal workspace**: the hosted connector is already authenticated, richer, and
-  was the original intended path — it works fine from inside Conductor too (Conductor
-  workspaces are just directories on this Mac; MCP connector access isn't scoped
-  per-worktree). Prefer the hosted connector there to avoid two tools writing to the same
-  workspace through different code paths. A profile for your personal workspace can still
-  exist in `linear-multi-workspaces` as a deliberate fallback in case the hosted connector
-  turns out not to be reliably reachable in some Conductor session — if that happens,
-  switch to `linear-cli --profile <personal>` for that session and note why.
-- When in doubt about which tool created/touched an issue in your personal workspace,
-  check `whoami` output and the issue's activity log rather than guessing.
+## Requirements *(mandatory)*
 
-## Script internals
+### Functional Requirements
 
-1. **Name→ID resolution** — team/project/label/assignee/state names resolved via
-   `@linear/sdk` lookups, cached per-profile (in-memory + on-disk, TTL ~1hr,
-   `~/.cache/linear-cli/<profile>.json`, gitignored).
-2. **Pagination** — one shared helper (`lib/pagination.mjs`) walks `hasNextPage`/cursor
-   for every list/bulk command.
-3. **Markdown-safe mutations** — descriptions/comments passed as SDK method arguments,
-   never interpolated into query strings.
-4. **Structured output** — every command ends with exactly one JSON line on stdout.
+- **FR-001**: System MUST resolve the active profile from `--profile`, falling back to the
+  `profile` key in `.claude/linear-workspace.json`, and MUST fail loudly (`NO_PROFILE`) with
+  no silent default when neither is present.
+- **FR-002**: System MUST resolve the active team from `--team`, falling back to the `team`
+  key in the same marker file; commands that require a team and get none MUST fail
+  (`MISSING_TEAM`) rather than guessing.
+- **FR-003**: System MUST store credentials outside any git repository, one Personal API Key
+  per named profile, and MUST warn (to stderr) when that file is readable by group or other.
+- **FR-004**: Every command MUST print exactly one JSON line to stdout: `{"ok": true, "data":
+  {...}}` on success or `{"ok": false, "error": {"code", "message"}}` on failure, and MUST
+  exit 0 or 1 to match.
+- **FR-005**: `bulk-update`, `archive-issue`, and `retire-label` MUST default to a no-op
+  dry-run that reports exactly what would change, and MUST only mutate when `--apply` is
+  passed.
+- **FR-006**: System MUST resolve team/project/label/assignee/state by human-readable name
+  (case-insensitively) or by raw ID, via `@linear/sdk` lookups, with each lookup list cached
+  per-profile (in-memory and on disk, ~1 hour TTL) to avoid re-listing the workspace on every
+  invocation.
+- **FR-007**: System MUST accept long text (issue descriptions, comment bodies) via a
+  `<path|->` argument, reading from stdin when `-` is given, and MUST NOT require long text
+  to be passed as a raw shell argument.
+- **FR-008**: `add-comment` MUST support anchoring the comment to an exact quoted excerpt of
+  the issue via `--quote`.
+- **FR-009**: System MUST walk pagination (`hasNextPage`/cursor) transparently for every
+  list/bulk command so callers always get the full result set in one invocation.
+- **FR-010**: Each invocation MUST target exactly one Linear workspace; the system MUST NOT
+  offer a cross-workspace bulk operation in a single call.
+- **FR-011**: `update-issue --append-section` MUST append the new section below any existing
+  description content, separated by a blank line if the existing description is non-empty.
 
-## Test record (v1 rollout)
+### Key Entities
 
-Live-verified against all configured workspaces from this Conductor session:
-`whoami`, `create-issue`, `add-comment --quote`, `update-issue --append-section` +
-`--state`, `list-issues` with team/state/query filters, `bulk-update` dry-run,
-`retire-label` dry-run, `archive-issue` dry-run + `--apply`. Created and assigned a
-`CONDUCTOR-TEST` issue in each configured workspace to confirm the full create → assign
-path end-to-end per workspace.
+- **Profile**: A named credential + workspace identity (e.g. `work-main`). Maps to exactly
+  one Personal API Key in the credential store.
+- **Workspace marker**: Per-repo, committed, non-secret file (`.claude/linear-workspace.json`)
+  pointing a repo at a default profile/team.
+- **Credential store**: Machine-global, never-committed file (`~/.config/linear-cli/credentials.json`)
+  mapping profile name → Personal API Key.
+- **Issue / Project / Label / WorkflowState / Team**: Linear's own entities, resolved by
+  name or ID through `@linear/sdk`; this tool adds no entities of its own on top of Linear's
+  data model.
 
-## Open questions / future extensions
+## Success Criteria *(mandatory)*
 
-- File/image attachments — explicitly deferred (see Non-goals).
-- Python port — only worth it if avoiding the npm dependency becomes a real constraint;
-  `@linear/sdk` being the official typed client is the reason Node was chosen for v1.
-- Cross-workspace bulk operations — still out of scope; each invocation targets one
-  workspace by design, to keep the blast radius of `bulk-update` bounded.
+### Measurable Outcomes
+
+- **SC-001**: `whoami` correctly resolves profile, workspace, viewer, and team for every
+  configured profile with zero misattributed workspace — verified live against all
+  configured workspaces during v1 rollout.
+- **SC-002**: The full create → assign path (`create-issue` + `add-comment --quote` +
+  `update-issue --append-section` + `--state`) succeeds end-to-end in every configured
+  workspace — verified via a `CONDUCTOR-TEST` issue created and assigned in each one.
+- **SC-003**: `bulk-update`, `archive-issue`, and `retire-label` dry-run output matches
+  exactly what changes on the subsequent `--apply` run, with zero mutations before `--apply`
+  — verified for all three commands during v1 rollout.
+- **SC-004**: A missing or misconfigured profile/credential surfaces as `NO_PROFILE` or
+  `NO_CREDENTIAL_FOR_PROFILE` before any network call that could mutate data, 100% of the
+  time.
+
+## Assumptions
+
+- Runs on a single Mac with Node.js and npm available; no containerization or multi-host
+  deployment is in scope.
+- `@linear/sdk` is Linear's official typed client, so entity resolution, mutation shapes,
+  and pagination are handled by Linear's own code — this is why Node was chosen for v1 over
+  a dependency-free Python port.
+- The hosted claude.ai Linear connector remains the preferred path for the user's personal
+  workspace; this tool's `personal` profile is a deliberate fallback, not the primary path,
+  for that one workspace.
+- File/image attachments are out of scope for v1 — specs are text/markdown only.
+- Cross-workspace bulk operations are intentionally out of scope, to keep the blast radius
+  of `bulk-update` bounded to one workspace per invocation.
+
+## Implementation Notes (as-built, non-normative)
+
+These capture operational detail that spec-kit's template doesn't have a slot for, kept
+because losing it would be a regression from the previous version of this document.
+
+**Architecture**: `SKILL.md` instructs Claude to invoke `scripts/linear-cli.mjs <subcommand>
+--flag value ...`, built on `@linear/sdk`, which talks to Linear's GraphQL API and always
+prints one JSON object to stdout. The only untyped boundary is Claude ↔ script (CLI args in,
+JSON out).
+
+**Deployment**: Canonical source is GitHub repo `ijoshdavis/linear-multi-workspaces`, `main`
+branch. Globally available via `~/.claude/skills/linear-multi-workspaces`, a symlink to the
+non-worktree checkout at `~/_src-conductor/repos/linear-multi-workspaces` (kept on `main`,
+`npm install`ed) — the same pattern as the `dt-doctor` and `ship` skills. Updating is
+commit/push/merge here, then `git pull` in that checkout; no re-linking needed.
+
+**One deviation from the original draft**: anchored/quoted comments (`add-comment --quote`)
+shipped in v1, not deferred — `CommentCreateInput.quotedText` turned out to be a plain field
+on Linear's API.
+
+## Open Questions / Future Extensions
+
+- File/image attachments — explicitly deferred (see Assumptions).
+- Python port — only worth it if avoiding the npm dependency becomes a real constraint.
+- Cross-workspace bulk operations — still out of scope by design.
